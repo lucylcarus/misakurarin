@@ -1,6 +1,40 @@
 const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
 
 (function(w) {
+    function getJsonI18N() {
+        // https://developer.mozilla.org/zh-CN/docs/Web/API/Navigator/language
+        
+        const LANGUAGES = [
+            { regex: /^zh\b/, lang: 'zh' },
+            { regex: /^ja\b/, lang: 'ja' },
+            { regex: /.*/, lang: 'en'}
+        ]
+
+        const lang = LANGUAGES.find(l => l.regex.test(navigator.language)).lang
+        
+        return $.ajax({
+            url: `./static/i18n/${lang}.json`,
+            dataType: 'json',
+            method: 'GET',
+            async: false,
+            success: data => res = data,
+            error: () => alert('找不到语言文件: ' + lang)
+        }).responseJSON
+    }
+
+    const I18N = getJsonI18N()
+
+    $('[data-i18n]').each(function() {
+        const content = I18N[this.dataset.i18n];
+        $(this).text(content);
+    });
+
+    $('[data-placeholder-i18n]').each(function() {
+        $(this).attr('placeholder', I18N[this.dataset.placeholderI18n]);
+    });
+
+    $('html').attr('lang', I18N['lang']);
+
     let isDesktop = !navigator['userAgent'].match(/(ipad|iphone|ipod|android|windows phone)/i);
     let fontunit = isDesktop ? 20 : ((window.innerWidth > window.innerHeight ? window.innerHeight : window.innerWidth) / 320) * 10;
     document.write('<style type="text/css">' +
@@ -22,7 +56,11 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
     let body, blockSize, GameLayer = [],
         GameLayerBG, touchArea = [],
         GameTimeLayer;
-    let transform, transitionDuration, welcomeLayerClosed, mode;
+    let transform, transitionDuration, welcomeLayerClosed;
+
+    let mode = getMode();
+
+    let soundMode = getSoundMode();
 
     w.init = function() {
         showWelcomeLayer();
@@ -47,8 +85,38 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         window.addEventListener('resize', refreshSize, false);
     }
 
-    w.readyBtn = function(mod) {
-        mode = mod;
+    function getMode() {
+        //有cookie优先返回cookie记录的，没有再返回normal
+        return cookie('gameMode') ? parseInt(cookie('gameMode')) : MODE_NORMAL;
+    }
+
+    function getSoundMode() {
+        // 默认为 on
+        return cookie('soundMode') ? cookie('soundMode') : 'on';
+    }
+
+    w.changeSoundMode = function() {
+        if (soundMode === 'on') {
+            soundMode = 'off';
+            $('#sound').text(I18N['sound-off']);
+        } else {
+            soundMode = 'on';
+            $('#sound').text(I18N['sound-on']);
+        }
+        cookie('soundMode', soundMode);
+    }
+
+    function modeToString(m) {
+        return m === MODE_NORMAL ? I18N['normal'] : (m === MODE_ENDLESS ? I18N['endless'] : I18N['practice']);
+    }
+
+    w.changeMode = function(m) {
+        mode = m;
+        cookie('gameMode', m);
+        $('#mode').text(modeToString(m));
+    }
+
+    w.readyBtn = function() {
         closeWelcomeLayer();
         updatePanel();
     }
@@ -62,12 +130,12 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
 
     let refreshSizeTime;
 
-    w.refreshSize = function() {
+    function refreshSize() {
         clearTimeout(refreshSizeTime);
         refreshSizeTime = setTimeout(_refreshSize, 200);
     }
 
-    w._refreshSize = function() {
+    function _refreshSize() {
         countBlockSize();
         for (let i = 0; i < GameLayer.length; i++) {
             let box = GameLayer[i];
@@ -95,7 +163,7 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         a.style[transform] = 'translate3D(0,' + a.y + 'px,0)';
     }
 
-    w.countBlockSize = function() {
+    function countBlockSize() {
         blockSize = body.offsetWidth / 4;
         body.style.height = window.innerHeight + 'px';
         GameLayerBG.style.height = window.innerHeight + 'px';
@@ -107,11 +175,12 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         _gameBBListIndex = 0,
         _gameOver = false,
         _gameStart = false,
-        _gameTime, _gameTimeNum, _gameScore, _date1, deviation_time;
+        _gameSettingNum=20,
+        _gameTime, _gameTimeNum, _gameScore, _date1, deviationTime;
 
-    let _gameStartTime;
+    let _gameStartTime, _gameStartDatetime;
 
-    w.gameInit = function() {
+    function gameInit() {
         createjs.Sound.registerSound({
             src: "./static/music/err.mp3",
             id: "err"
@@ -127,13 +196,13 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         gameRestart();
     }
 
-    w.gameRestart = function() {
+    function gameRestart() {
         _gameBBList = [];
         _gameBBListIndex = 0;
         _gameScore = 0;
         _gameOver = false;
         _gameStart = false;
-        _gameTimeNum = 20;
+        _gameTimeNum = _gameSettingNum;
         _gameStartTime = 0;
         countBlockSize();
         refreshGameLayer(GameLayer[0]);
@@ -141,95 +210,96 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         updatePanel();
     }
 
-    w.gameStart = function() {
+    function gameStart() {
         _date1 = new Date();
+        _gameStartDatetime = _date1.getTime();
         _gameStart = true;
 
-        _gameTime = setInterval(timer, 200);
+        _gameTime = setInterval(timer, 1000);
     }
 
     function getCPS() {
-        let cps = _gameScore / _gameStartTime;
-        if (isNaN(cps) || cps === Infinity) {
+        let cps = _gameScore / ((new Date().getTime() - _gameStartDatetime) / 1000);
+        if (isNaN(cps) || cps === Infinity || _gameStartTime < 2) {
             cps = 0;
         }
         return cps;
     }
 
     function timer() {
-        _gameTimeNum -= 0.2;
-        _gameStartTime += 0.2;
-
+        _gameTimeNum--;
+        _gameStartTime++;
+        if (mode === MODE_NORMAL && _gameTimeNum <= 0) {
+            GameTimeLayer.innerHTML = I18N['time-up'] + '!';
+            gameOver();
+            GameLayerBG.className += ' flash';
+            if (soundMode === 'on') {
+                createjs.Sound.play("end");
+            }
+        }
         updatePanel();
     }
 
     function updatePanel() {
         if (mode === MODE_NORMAL) {
-            if (_gameTimeNum <= 0) {
-                GameTimeLayer.innerHTML = '&nbsp;&nbsp;&nbsp;&nbsp;时间到！';
-                gameOver();
-                GameLayerBG.className += ' flash';
-                createjs.Sound.play("end");
-            } else {
-                GameTimeLayer.innerHTML = creatTimeText(_gameTimeNum);
+            if (!_gameOver) {
+                GameTimeLayer.innerHTML = createTimeText(_gameTimeNum);
             }
         } else if (mode === MODE_ENDLESS) {
-            GameTimeLayer.innerHTML = `CPS:${getCPS().toFixed(2)}`;
+            let cps = getCPS();
+            let text = (cps === 0 ? I18N['calculating'] : cps.toFixed(2));
+            GameTimeLayer.innerHTML = `CPS:${text}`;
         } else {
             GameTimeLayer.innerHTML = `SCORE:${_gameScore}`;
         }
     }
+    //使重试按钮获得焦点
+    function foucusOnReplay(){
+        $('#replay').focus()
+    }
 
-    w.gameOver = function() {
+    function gameOver() {
         _gameOver = true;
         clearInterval(_gameTime);
+        let cps = getCPS();
+        updatePanel();
         setTimeout(function () {
             GameLayerBG.className = '';
-            showGameScoreLayer();
+            showGameScoreLayer(cps);
+            foucusOnReplay();
         }, 1500);
     }
 
 
-    w.encrypt = function(text) {
+    function encrypt(text) {
         let encrypt = new JSEncrypt();
         encrypt.setPublicKey("MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDTzGwX6FVKc7rDiyF3H+jKpBlRCV4jOiJ4JR33qZPVXx8ahW6brdBF9H1vdHBAyO6AeYBumKIyunXP9xzvs1qJdRNhNoVwHCwGDu7TA+U4M7G9FArDG0Y6k4LbS0Ks9zeRBMiWkW53yQlPshhtOxXCuZZOMLqk1vEvTCODYYqX5QIDAQAB");
         return encrypt.encrypt(text);
     }
 
-    w.SubmitResults = function() {
-        let system = "其他操作系统";
-        let area = "异世界";
-        if (document.getElementById("username").value) {
-            if (navigator.appVersion.indexOf("Win") !== -1) system = "Windows";
-            if (navigator.appVersion.indexOf("Mac") !== -1) system = "Macintosh";
-            if (navigator.appVersion.indexOf("Linux") !== -1) system = "Linux";
-            if (navigator.appVersion.indexOf("Android") !== -1) system = "Android";
-            if (navigator.appVersion.indexOf("like Mac") !== -1) system = "iOS";
-            if (returnCitySN['cname']) {
-                area = returnCitySN['cname']
-            }
+    function SubmitResults() {
+        if ($("#username").val() && _gameSettingNum === 20) {
             let httpRequest = new XMLHttpRequest();
             httpRequest.open('POST', './SubmitResults.php', true);
             httpRequest.setRequestHeader("Content-type", "application/json");
-            let name = document.getElementById("username").value;
-            let message = document.getElementById("message").value;
+            let name = $("#username").val();
+            let message = $("#message").val();
             let test = "|_|";
-            httpRequest.send(encrypt(_gameScore + test + name + test + tj + test + system + test + area + test + message));
+            httpRequest.send(encrypt(_gameScore + test + name + test + tj + test + message));
         }
     }
 
-    w.creatTimeText = function(n) {
-        return '&nbsp;TIME:' + Math.ceil(n);
+    function createTimeText(n) {
+        return 'TIME:' + Math.ceil(n);
     }
 
     let _ttreg = / t{1,2}(\d+)/,
         _clearttClsReg = / t{1,2}\d+| bad/;
 
-    w.refreshGameLayer = function(box, loop, offset) {
+    function refreshGameLayer(box, loop, offset) {
         let i = Math.floor(Math.random() * 1000) % 4 + (loop ? 0 : 4);
         for (let j = 0; j < box.children.length; j++) {
-            let r = box.children[j],
-                rstyle = r.style;
+            let r = box.children[j], rstyle = r.style;
             rstyle.left = (j % 4) * blockSize + 'px';
             rstyle.bottom = Math.floor(j / 4) * blockSize + 'px';
             rstyle.width = blockSize + 'px';
@@ -264,7 +334,7 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         box.style[transitionDuration] = '150ms';
     }
 
-    w.gameLayerMoveNextRow = function() {
+    function gameLayerMoveNextRow() {
         for (let i = 0; i < GameLayer.length; i++) {
             let g = GameLayer[i];
             g.y += blockSize;
@@ -276,7 +346,7 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         }
     }
 
-    w.gameTapEvent = function(e) {
+    function gameTapEvent(e) {
         if (_gameOver) {
             return false;
         }
@@ -292,7 +362,9 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
             if (!_gameStart) {
                 gameStart();
             }
-            createjs.Sound.play("tap");
+            if (soundMode === 'on') {
+                createjs.Sound.play("tap");
+            }
             tar = document.getElementById(p.id);
             tar.className = tar.className.replace(_ttreg, ' tt$1');
             _gameBBListIndex++;
@@ -302,7 +374,9 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
 
             gameLayerMoveNextRow();
         } else if (_gameStart && !tar.notEmpty) {
-            createjs.Sound.play("err");
+            if (soundMode === 'on') {
+                createjs.Sound.play("err");
+            }
             tar.classList.add('bad');
             if (mode === MODE_PRACTICE) {
                 setTimeout(() => {
@@ -315,7 +389,7 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         return false;
     }
 
-    w.createGameLayer = function() {
+    function createGameLayer() {
         let html = '<div id="GameLayerBG">';
         for (let i = 1; i <= 2; i++) {
             let id = 'GameLayer' + i;
@@ -329,21 +403,20 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
             html += '</div>';
         }
         html += '</div>';
-        html += '<div id="GameTimeLayer"></div>';
+        html += '<div id="GameTimeLayer" class="text-center"></div>';
         return html;
     }
 
-    w.closeWelcomeLayer = function() {
+    function closeWelcomeLayer() {
         welcomeLayerClosed = true;
-        let l = document.getElementById('welcome');
-        l.style.display = 'none';
+        $('#welcome').css('display', 'none');
         updatePanel();
     }
 
-    w.showWelcomeLayer = function() {
+    function showWelcomeLayer() {
         welcomeLayerClosed = false;
-        let l = document.getElementById('welcome');
-        l.style.display = 'block';
+        $('#mode').text(modeToString(mode));
+        $('#welcome').css('display', 'block');
     }
 
     function getBestScore(score) {
@@ -358,25 +431,30 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         return mode === MODE_ENDLESS ? score.toFixed(2) : score.toString();
     }
 
-    w.showGameScoreLayer = function() {
-        let l = document.getElementById('GameScoreLayer');
-        let c = document.getElementById(_gameBBList[_gameBBListIndex - 1].id).className.match(_ttreg)[1];
-        let score = (mode === MODE_ENDLESS ? parseFloat(getCPS().toFixed(2)) : _gameScore);
-        let best = getBestScore(score);
-        score = scoreToString(score);
-        l.className = l.className.replace(/bgc\d/, 'bgc' + c);
-        document.getElementById('GameScoreLayer-text').innerHTML = shareText(_gameScore);
-        let score_text = '得分&nbsp;&nbsp;';
-        let normalCond = deviation_time < 23000 || mode !== MODE_NORMAL;
-        score_text += normalCond ? score : "<span style='color:red;'>" + score + "</span>";
-        document.getElementById('GameScoreLayer-score').innerHTML = score_text;
-        document.getElementById('GameScoreLayer-bast').innerHTML = '最佳&nbsp;&nbsp;' + scoreToString(best);
-        l.style.display = 'block';
+    function legalDeviationTime() {
+        return deviationTime < (_gameSettingNum + 3) * 1000;
     }
 
-    w.hideGameScoreLayer = function() {
-        let l = document.getElementById('GameScoreLayer');
-        l.style.display = 'none';
+    function showGameScoreLayer(cps) {
+        let l = $('#GameScoreLayer');
+        let c = $(`#${_gameBBList[_gameBBListIndex - 1].id}`).attr('class').match(_ttreg)[1];
+        let score = (mode === MODE_ENDLESS ? cps : _gameScore);
+        let best = getBestScore(score);
+        l.attr('class', l.attr('class').replace(/bgc\d/, 'bgc' + c));
+        $('#GameScoreLayer-text').html(shareText(cps));
+        let normalCond = legalDeviationTime() || mode !== MODE_NORMAL;
+        l.css('color', normalCond ? '': 'red');
+
+        $('#cps').text(cps.toFixed(2));
+        $('#score').text(scoreToString(score));
+        $('#GameScoreLayer-score').css('display', mode === MODE_ENDLESS ? 'none' : '');
+        $('#best').text(scoreToString(best));
+
+        l.css('display', 'block');
+    }
+
+    function hideGameScoreLayer() {
+        $('#GameScoreLayer').css('display', 'none');
     }
 
     w.replayBtn = function() {
@@ -390,25 +468,24 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         showWelcomeLayer();
     }
 
-    w.shareText = function(score) {
+    function shareText(cps) {
         if (mode === MODE_NORMAL) {
             let date2 = new Date();
-            deviation_time = (date2.getTime() - _date1.getTime())
-            if (deviation_time > 23000) {
-                return '倒计时多了' + ((deviation_time / 1000) - 20).toFixed(2) + "s";
+            deviationTime = (date2.getTime() - _date1.getTime())
+            if (!legalDeviationTime()) {
+                return I18N['time-over'] + ((deviationTime / 1000) - _gameSettingNum).toFixed(2) + 's';
             }
             SubmitResults();
         }
-        // TODO 添加反馈
-        if (mode === MODE_ENDLESS) return '';
-        if (score <= 49) return '试着好好练一下？';
-        if (score <= 99) return 'TCL';
-        if (score <= 149) return 'TQL';
-        if (score <= 199) return '您';
-        return '人？';
+
+        if (cps <= 5) return I18N['text-level-1'];
+        if (cps <= 8) return I18N['text-level-2'];
+        if (cps <= 10)  return I18N['text-level-3'];
+        if (cps <= 15) return I18N['text-level-4'];
+        return I18N['text-level-5'];
     }
 
-    w.toStr = function(obj) {
+    function toStr(obj) {
         if (typeof obj === 'object') {
             return JSON.stringify(obj);
         } else {
@@ -416,7 +493,7 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         }
     }
 
-    w.cookie = function(name, value, time) {
+    function cookie(name, value, time) {
         if (name) {
             if (value) {
                 if (time) {
@@ -439,47 +516,59 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
 
     document.write(createGameLayer());
 
-    w.initSetting = function() {
-        document.getElementById("username").value = cookie("username") ? cookie("username") : "";
-        document.getElementById("message").value = cookie("message") ? cookie("message") : "";
-        document.getElementsByTagName("title")[0].innerText = cookie("title") ? cookie("title") : "EatCocoa-LOVEPOTION SIXTYNINE";
-        if (cookie("keyboard")) {
-            document.getElementById("keyboard").value = cookie("keyboard");
+    function initSetting() {
+        $("#username").val(cookie("username") ? cookie("username") : "");
+        $("#message").val(cookie("message") ? cookie("message") : "");
+        if (cookie("title")) {
+            $('title').text(cookie('title'));
+            $('#title').val(cookie('title'));
+        }
+        let keyboard = cookie('keyboard');
+        if (keyboard) {
+            keyboard = keyboard.toString().toLowerCase();
+            $("#keyboard").val(keyboard);
             map = {}
-            map[cookie("keyboard").charAt(0).toLowerCase()] = 1;
-            map[cookie("keyboard").charAt(1).toLowerCase()] = 2;
-            map[cookie("keyboard").charAt(2).toLowerCase()] = 3;
-            map[cookie("keyboard").charAt(3).toLowerCase()] = 4;
+            map[keyboard.charAt(0)] = 1;
+            map[keyboard.charAt(1)] = 2;
+            map[keyboard.charAt(2)] = 3;
+            map[keyboard.charAt(3)] = 4;
+        }
+        if (cookie('gameTime')) {
+            $('#gameTime').val(cookie('gameTime'));
+            _gameSettingNum = parseInt(cookie('gameTime'));
+            gameRestart();
         }
     }
 
     w.show_btn = function() {
-        document.getElementById("btn_group").style.display = "block"
-        document.getElementById("setting").style.display = "none"
-        document.getElementById("desc").style.display = "block"
+        $("#btn_group,#desc").css('display', 'block')
+        $('#setting').css('display', 'none')
     }
 
     w.show_setting = function() {
-        document.getElementById("btn_group").style.display = "none"
-        document.getElementById("setting").style.display = "block"
-        document.getElementById("desc").style.display = "none"
+        $('#btn_group,#desc').css('display', 'none')
+        $('#setting').css('display', 'block')
+        $('#sound').text(soundMode === 'on' ? I18N['sound-on'] : I18N['sound-off']);
     }
 
     w.save_cookie = function() {
-        cookie('username', document.getElementById("username").value, 100);
-        cookie('message', document.getElementById("message").value, 100);
-        cookie('keyboard', document.getElementById("keyboard").value, 100);
-        cookie('title', document.getElementById("title").value, 100);
+        const settings = ['username', 'message', 'keyboard', 'title', 'gameTime'];
+        for (let s of settings) {
+            let value=$(`#${s}`).val();
+            if(value){
+                cookie(s, value.toString(), 100);
+            }
+        }
         initSetting();
     }
 
-    w.isnull = function(val) {
+    function isnull(val) {
         let str = val.replace(/(^\s*)|(\s*$)/g, '');
         return str === '' || str === undefined || str == null;
     }
 
     w.goRank = function() {
-        let name = document.getElementById("username").value;
+        let name = $("#username").val();
         let link = './rank.php';
         if (!isnull(name)) {
             link += "?name=" + name;
@@ -493,7 +582,7 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         }
 
         let p = _gameBBList[_gameBBListIndex];
-        let base = parseInt(document.getElementById(p.id).getAttribute("num")) - p.cell;
+        let base = parseInt($(`#${p.id}`).attr("num")) - p.cell;
         let num = base + index - 1;
         let id = p.id.substring(0, 11) + num;
 
@@ -507,10 +596,10 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
         gameTapEvent(fakeEvent);
     }
 
-    const clickBeforeStyle = document.createElement('style');
-    const clickAfterStyle = document.createElement('style');
-    document.head.append(clickBeforeStyle);
-    document.head.append(clickAfterStyle);
+    const clickBeforeStyle = $('<style></style>');
+    const clickAfterStyle = $('<style></style>');
+    clickBeforeStyle.appendTo($(document.head));
+    clickAfterStyle.appendTo($(document.head));
 
     function saveImage(dom, callback) {
         if (dom.files && dom.files[0]) {
@@ -524,34 +613,32 @@ const MODE_NORMAL = 1, MODE_ENDLESS = 2, MODE_PRACTICE = 3;
 
 
     w.getClickBeforeImage = function() {
-        const img = document.getElementById('click-before-image');
-        img.click();
+        $('#click-before-image').click();
     }
 
     w.saveClickBeforeImage = function() {
         const img = document.getElementById('click-before-image');
         saveImage(img, r => {
-            clickBeforeStyle.innerHTML = `
+            clickBeforeStyle.html(`
                 .t1, .t2, .t3, .t4, .t5 {
                    background-size: auto 100%;
                    background-image: url(${r});
-            }`;
+            }`);
         })
     }
 
     w.getClickAfterImage = function() {
-        const img = document.getElementById('click-after-image');
-        img.click();
+        $('#click-after-image').click();
     }
 
     w.saveClickAfterImage = function() {
         const img = document.getElementById('click-after-image');
         saveImage(img, r => {
-            clickAfterStyle.innerHTML = `
+            clickAfterStyle.html(`
                 .tt1, .tt2, .tt3, .tt4, .tt5 {
                   background-size: auto 86%;
                   background-image: url(${r});
-            }`;
+            }`);
         })
     }
 }) (window);
